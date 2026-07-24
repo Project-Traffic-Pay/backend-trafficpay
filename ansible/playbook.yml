@@ -1,0 +1,80 @@
+---
+- name: Deploy TrafficPay Backend Microservices to AWS EC2 Free Tier
+  hosts: backend_servers
+  become: true
+
+  tasks:
+    - name: Update APT package cache
+      apt:
+        update_cache: yes
+
+    - name: Install Prerequisites (Curl, Git, Nginx, Unzip)
+      apt:
+        name:
+          - curl
+          - git
+          - nginx
+          - ufw
+        state: present
+
+    - name: Install Node.js 20 LTS
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        apt-get install -y nodejs
+
+    - name: Install PM2 Process Manager globally
+      npm:
+        name: pm2
+        global: yes
+
+    - name: Clone TrafficPay Backend Repository
+      git:
+        repo: 'https://github.com/Project-Traffic-Pay/backend-trafficpay.git'
+        dest: /var/www/trafficpay-backend
+        version: main
+        force: yes
+
+    - name: Install Backend Node Dependencies
+      npm:
+        path: /var/www/trafficpay-backend
+
+    - name: Configure Nginx Reverse Proxy for API Gateway
+      copy:
+        dest: /etc/nginx/sites-available/trafficpay
+        content: |
+          server {
+              listen 80;
+              server_name _;
+
+              location /api/ {
+                  proxy_pass http://localhost:5000/api/;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_cache_bypass $http_upgrade;
+              }
+          }
+
+    - name: Enable Nginx TrafficPay Site Configuration
+      file:
+        src: /etc/nginx/sites-available/trafficpay
+        dest: /etc/nginx/sites-enabled/trafficpay
+        state: link
+
+    - name: Remove Default Nginx Site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Restart Nginx Service
+      systemd:
+        name: nginx
+        state: restarted
+        enabled: yes
+
+    - name: Start TrafficPay API Gateway with PM2
+      shell: |
+        cd /var/www/trafficpay-backend
+        pm2 restart trafficpay-gateway || pm2 start src/server.js --name "trafficpay-gateway"
+        pm2 save
